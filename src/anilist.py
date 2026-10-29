@@ -5,12 +5,18 @@ import time
 import requests
 import logging
 from datetime import date, timedelta
-from .utils import SEASON_START_MONTH, format_season_name
+from .config import (
+    ANILIST_API_URL,
+    ANILIST_API_TIMEOUT,
+    ANILIST_API_RETRIES,
+    ANILIST_PER_PAGE,
+    DEFAULT_GRACE_DAYS,
+    SEASON_ORDER,
+    SEASON_START_MONTH,
+)
+from .utils import format_season_name
 
-API_URL = "https://graphql.anilist.co"
-
-# Season order
-SEASON_ORDER = ["WINTER", "SPRING", "SUMMER", "FALL"]
+API_URL = ANILIST_API_URL
 
 # Fetched seasons, so consecutive seasons don't download the same data twice
 _season_cache: dict[tuple[str, int, bool], list[dict]] = {}
@@ -125,7 +131,7 @@ def get_previous_season(season: str, year: int):
         return SEASON_ORDER[current_idx - 1], year
 
 
-def get_seasonal_anime(season: str, year: int, per_page: int = 50, include_adult: bool = False, include_continuing: bool = True, grace_days: int = 21):
+def get_seasonal_anime(season: str, year: int, per_page: int = ANILIST_PER_PAGE, include_adult: bool = False, include_continuing: bool = True, grace_days: int = DEFAULT_GRACE_DAYS):
     """
     Fetch seasonal anime from AniList API, including continuing anime from previous season
 
@@ -171,7 +177,7 @@ def get_seasonal_anime(season: str, year: int, per_page: int = 50, include_adult
     return results
 
 
-def get_yearly_anime(year: int, per_page: int = 50, include_adult: bool = False) -> list[dict]:
+def get_yearly_anime(year: int, per_page: int = ANILIST_PER_PAGE, include_adult: bool = False) -> list[dict]:
     """
     Fetch every anime of a calendar year, including upcoming shows with no season yet.
 
@@ -198,14 +204,14 @@ def get_yearly_anime(year: int, per_page: int = 50, include_adult: bool = False)
     return sorted(results.values(), key=lambda anime: anime.get("popularity") or 0, reverse=True)
 
 
-def _post(query: str, variables: dict, retries: int = 3) -> dict:
+def _post(query: str, variables: dict, retries: int = ANILIST_API_RETRIES) -> dict:
     """POST to AniList, retrying rate limits and transient failures."""
     for attempt in range(1, retries + 1):
         try:
             resp = requests.post(
                 API_URL,
                 json={"query": query, "variables": variables},
-                timeout=30
+                timeout=ANILIST_API_TIMEOUT
             )
         except requests.RequestException as error:
             if attempt == retries:

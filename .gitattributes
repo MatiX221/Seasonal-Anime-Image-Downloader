@@ -1,0 +1,11 @@
+# Global line-ending enforcement
+* text eol=lf
+
+# Contextual diff headers for code reviews
+*.py                    diff=python
+
+# Strip internal tooling from downloaded release archives
+.gitattributes          export-ignore
+.gitignore              export-ignore
+.github                 export-ignore
+.vscode                 export-ignore

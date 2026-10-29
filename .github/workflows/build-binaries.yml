@@ -1,0 +1,187 @@
+name: Build Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: 'Commit SHA (full or short hash) to build (leave empty for latest)'
+        required: false
+        default: ''
+        type: string
+      create_release:
+        description: 'Create a GitHub Release from this build?'
+        required: false
+        default: false
+        type: boolean
+      release_tag:
+        description: 'Release tag name (e.g. v1.0.0, recommended if creating a release)'
+        required: false
+        default: ''
+        type: string
+  push:
+    tags:
+      - 'v*'          # Automatically runs and publishes when creating a release tag
+    branches:
+      - main          # Verify compilation on pushes to main
+  pull_request:
+    branches:
+      - main          # Verify compilation on Pull Requests targeting main
+
+jobs:
+  check-version:
+    name: Verify Version Tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout custom commit
+        if: inputs.commit_sha != ''
+        run: git checkout ${{ inputs.commit_sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate tag against src/__init__.py
+        run: |
+          python - << 'EOF'
+          import os
+          import sys
+          import re
+
+          # Determine the tag from git ref or manual workflow input
+          tag = ""
+          ref = os.environ.get("GITHUB_REF", "")
+          input_tag = os.environ.get("INPUT_RELEASE_TAG", "").strip()
+
+          if input_tag:
+              tag = input_tag
+          elif ref.startswith("refs/tags/"):
+              tag = ref.replace("refs/tags/", "")
+
+          if not tag:
+              print("No tag specified for this run. Skipping version check.")
+              sys.exit(0)
+
+          clean_tag = re.sub(r'^[vV]', '', tag)
+
+          with open("src/__init__.py", "r", encoding="utf-8") as f:
+              m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', f.read())
+              if not m:
+                  print("::error::Could not find __version__ in src/__init__.py")
+                  sys.exit(1)
+              project_version = m.group(1).strip()
+
+          print(f"Target tag: {tag} (normalized: {clean_tag})")
+          print(f"Project __version__: {project_version}")
+
+          if clean_tag != project_version:
+              print(f"::error::Version mismatch! Tag specifies '{tag}' (normalized: '{clean_tag}'), but src/__init__.py has '{project_version}'.")
+              sys.exit(1)
+
+          print("Version check passed: Tag matches project version.")
+          EOF
+        env:
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: check-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x86_64
+            output_name: anime-downloader-windows-x86_64.exe
+          - os: ubuntu-latest
+            target: linux-x86_64
+            output_name: anime-downloader-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: linux-aarch64
+            output_name: anime-downloader-linux-aarch64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history so any commit hash or prefix can be checked out
+
+      - name: Checkout custom commit
+        if: inputs.commit_sha != ''
+        run: git checkout ${{ inputs.commit_sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf ccache
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nuitka zstandard
+
+      - name: Build standalone binary with Nuitka
+        run: |
+          python -m nuitka --standalone --onefile --lto=auto --python-flag=-O --python-flag=no_docstrings --include-package=src --enable-plugin=anti-bloat --assume-yes-for-downloads --output-filename=${{ matrix.output_name }} run.py
+
+      - name: Set execution permissions (Linux)
+        if: runner.os == 'Linux'
+        run: chmod +x ${{ matrix.output_name }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ matrix.output_name }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: |
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.create_release == true)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Determine Release Tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            echo "tag=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          elif [ -n "${{ inputs.commit_sha }}" ]; then
+            echo "tag=release-${{ inputs.commit_sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=manual-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish Release with Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          target_commitish: ${{ inputs.commit_sha != '' && inputs.commit_sha || github.sha }}
+          files: release-artifacts/*
+          generate_release_notes: true

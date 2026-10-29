@@ -212,3 +212,11 @@ __marimo__/
 
 # Project
 seasonal/
+
+# Nuitka build artifacts
+*.build/
+*.dist/
+*.onefile-build/
+*.exe
+*.bin
+anime-downloader*

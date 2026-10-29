@@ -5,9 +5,7 @@ import re
 from datetime import datetime
 from typing import Iterable
 
-SEASON_START_MONTH = {"WINTER": 1, "SPRING": 4, "SUMMER": 7, "FALL": 10}
-VALID_FORMATS = ("TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC")
-VALID_TITLE_LANGUAGES = ("romaji", "english", "native")
+from .config import SEASON_START_MONTH, VALID_FORMATS, VALID_TITLE_LANGUAGES
 _WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 

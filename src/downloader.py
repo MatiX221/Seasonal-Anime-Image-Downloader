@@ -11,6 +11,13 @@ import requests
 import threading
 from tqdm import tqdm
 from typing import List, Sequence
+from .config import (
+    DEFAULT_WORKERS,
+    DEFAULT_DELAY,
+    DOWNLOAD_RETRIES,
+    DOWNLOAD_BACKOFF,
+    DEFAULT_TITLE_LANGUAGES,
+)
 from .utils import sanitize_filename, pick_title
 
 
@@ -20,7 +27,16 @@ _PART_NAME_RE = re.compile(r"^\d+ - \d+ - .*\.jpg\.part$")
 
 
 class Downloader:
-    def __init__(self, out_dir: str | Path, max_workers: int = 8, delay: float = 0.15, retries: int = 2, backoff: float = 1.0, title_languages: Sequence[str] = ("romaji",), force: bool = False):
+    def __init__(
+        self,
+        out_dir: str | Path,
+        max_workers: int = DEFAULT_WORKERS,
+        delay: int = DEFAULT_DELAY,
+        retries: int = DOWNLOAD_RETRIES,
+        backoff: float = DOWNLOAD_BACKOFF,
+        title_languages: Sequence[str] = DEFAULT_TITLE_LANGUAGES,
+        force: bool = False,
+    ):
         self.out_dir = Path(out_dir)
         self.max_workers = max_workers
         self.delay = delay
@@ -39,10 +55,11 @@ class Downloader:
 
     def _throttle(self):
         """Global spacing between requests, shared by all workers"""
+        delay_sec = self.delay / 1000.0
         with self._rate_lock:
             now = time.monotonic()
             wait = self._next_slot - now
-            self._next_slot = max(now, self._next_slot) + self.delay
+            self._next_slot = max(now, self._next_slot) + delay_sec
         if wait > 0:
             time.sleep(wait)
 

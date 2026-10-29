@@ -4,20 +4,12 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
-from .utils import SEASON_START_MONTH, format_season_name, fuzzy_match
+from .config import SEASONS, MIN_YEAR, YEAR_WEIGHT, SEASON_ALIASES
+from .utils import format_season_name, fuzzy_match
 
-# WINTER, SPRING, SUMMER, FALL in calendar order
-SEASONS = tuple(SEASON_START_MONTH)
-
-# Earliest year accepted: AniList maps a seasonYear below 1950 onto 20xx.
-# Those years would otherwise return unrelated modern shows.
-MIN_YEAR = 1950
-
-ALIASES = {"AUTUMN": "FALL"}
+ALIASES = SEASON_ALIASES
 WILDCARD_ANY = "ANY"
 WILDCARD_YEAR = "YEAR"
-# A whole year is roughly as much work as four seasons
-YEAR_WEIGHT = 4
 
 
 @dataclass(frozen=True)

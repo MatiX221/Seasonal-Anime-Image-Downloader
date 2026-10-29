@@ -6,27 +6,38 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
+from . import __version__
+from .config import (
+    DEFAULT_WORKERS,
+    DEFAULT_DELAY,
+    DEFAULT_OUT_DIR,
+    DEFAULT_MERGE_NAME,
+    DEFAULT_GRACE_DAYS,
+    DEFAULT_TITLE_LANGUAGES,
+    DEFAULT_LOG_FORMAT,
+    CONFIRM_ABOVE,
+    YEAR_WEIGHT,
+    VALID_FORMATS,
+    VALID_TITLE_LANGUAGES,
+)
 from .anilist import get_seasonal_anime, get_yearly_anime, filter_by_format
 from .downloader import Downloader
 from .genres import GenreMatcher, parse_genre_expression
-from .seasons import SEASONS, YEAR_WEIGHT, Job, parse_jobs
+from .seasons import SEASONS, Job, parse_jobs
 from .sorting import SortKey, describe_sort, parse_sort, sort_anime
 from .utils import (
     get_current_season,
     normalize_season,
     parse_choices,
     sanitize_filename,
-    VALID_FORMATS,
-    VALID_TITLE_LANGUAGES,
 )
 
 
 def setup_logging(logfile: Path):
     """Configure logging to both file and console"""
-    fmt = "%(asctime)s - %(levelname)s - %(message)s"
     logging.basicConfig(
         level=logging.INFO,
-        format=fmt,
+        format=DEFAULT_LOG_FORMAT,
         handlers=[
             logging.FileHandler(logfile, encoding='utf-8'),
             logging.StreamHandler()
@@ -39,10 +50,6 @@ def positive_int(value: str) -> int:
     if number < 1:
         raise argparse.ArgumentTypeError("must be 1 or greater")
     return number
-
-
-CONFIRM_ABOVE = 5
-DEFAULT_MERGE_NAME = "Merged"
 
 
 def describe_jobs(jobs: list[Job], keep: int = 3) -> str:
@@ -271,62 +278,80 @@ def needs_year_tip(jobs: list[Job]) -> bool:
     return False
 
 
+class SmartHelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    """Clean help formatter that respects descriptions/epilog newlines and suppresses redundant defaults."""
+
+    def __init__(self, prog):
+        super().__init__(prog, max_help_position=32)
+
+    def _get_help_string(self, action):
+        help_text = action.help or ""
+        if action.default in (None, False, argparse.SUPPRESS) or "%(default)" in help_text or "default:" in help_text.lower():
+            return help_text
+        return help_text + " (default: %(default)s)"
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Seasonal anime cover downloader — glorified image thief",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        prog="anime-downloader",
+        description="Seasonal Anime Cover Downloader - glorified image thief\nDownload anime cover images from AniList for any season to use with TierMaker or ranking tools.",
+        formatter_class=SmartHelpFormatter,
+        add_help=False,
+        epilog="""examples:
+  anime-downloader                            Auto-detect and download current season
+  anime-downloader -s Winter -y 2025          Download specific season and year
+  anime-downloader -s fall -S score -l 30     Top 30 rated shows of Fall
+  anime-downloader -s year:2025 -f tv -l 50   Top 50 TV shows across all of 2025
+  anime-downloader -s winter,spring --merge   Combine multiple seasons into one folder
+  anime-downloader -G "(comedy&!romance)"     Filter using boolean genre expression"""
     )
-    parser.add_argument(
+
+    gen_group = parser.add_argument_group("General Options")
+    gen_group.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        help="Show this help message and exit"
+    )
+    gen_group.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Show program's version number and exit"
+    )
+
+    target_group = parser.add_argument_group("Season & Target Selection")
+    target_group.add_argument(
         "-s",
         "--season",
         nargs="+",
         metavar="SEASON",
-        help="Season(s), comma separated: winter, spring, summer, fall (autumn works), any (all four) or year (the whole year, including shows with no season yet). Add :YEAR (or :START-END) to give one its own years, e.g. winter:2025 or year:2023-2025. Auto-detects the current season if not specified"
+        help="Season(s), comma separated: winter, spring, summer, fall (autumn works), any (all four) or year (the whole year, including shows with no season yet). Add :YEAR (or :START-END) to give one its own years, e.g. winter:2025 or year:2023-2025. Defaults to current season"
     )
-    parser.add_argument(
+    target_group.add_argument(
         "-y",
         "--year",
         nargs="+",
         metavar="YEAR",
         help="Year(s) or ranges, comma separated, e.g. 2025, 2023-2026. Applies to seasons without their own year. Defaults to current year"
     )
-    parser.add_argument(
-        "-o",
-        "--out",
-        type=str,
-        default="seasonal",
-        help="Output base directory"
-    )
-    parser.add_argument(
-        "-w",
-        "--workers",
+    target_group.add_argument(
+        "-g",
+        "--grace-days",
         type=int,
-        default=8,
-        help="Number of parallel download workers"
+        default=DEFAULT_GRACE_DAYS,
+        metavar="DAYS",
+        help="Days into a season a previous-season show must still air to count as continuing"
     )
-    parser.add_argument(
-        "-d",
-        "--delay",
-        type=float,
-        default=0.15,
-        help="Minimum delay between image requests, shared by all workers (seconds)"
-    )
-    parser.add_argument(
-        "--no-json",
-        action="store_true",
-        help="Do not output metadata JSON"
-    )
-    parser.add_argument(
-        "--include-adult",
-        action="store_true",
-        help="Include adult/hentai content (default: False)"
-    )
-    parser.add_argument(
+    target_group.add_argument(
         "--no-continuing",
         action="store_true",
-        help="Exclude anime continuing from previous season (default: includes continuing anime)"
+        help="Exclude anime continuing from previous season"
     )
-    format_group = parser.add_mutually_exclusive_group()
+
+    filter_group = parser.add_argument_group("Filters & Sorting")
+    format_group = filter_group.add_mutually_exclusive_group()
     format_group.add_argument(
         "-f",
         "--format",
@@ -340,50 +365,49 @@ def main():
         metavar="FORMAT",
         help="Skip these formats, comma separated (blacklist). Can't be combined with --format"
     )
-    parser.add_argument(
+    filter_group.add_argument(
         "-G",
         "--genre",
         nargs="+",
         metavar="EXPR",
         help='Only keep shows whose genres match an expression: & both, | either, ! or ~ not, parentheses to group, e.g. "(comedy&!romance)|action". Quote it if it uses operators. Names are case-insensitive, and short forms like sol, scifi and "magical girl" work'
     )
-    parser.add_argument(
+    filter_group.add_argument(
         "--exclude-genre",
         nargs="+",
         metavar="EXPR",
         help="Drop shows whose genres match an expression (same syntax as --genre). Can be combined with --genre"
     )
-    parser.add_argument(
+    filter_group.add_argument(
+        "--include-adult",
+        action="store_true",
+        help="Include adult / hentai content"
+    )
+    filter_group.add_argument(
+        "-S",
+        "--sort",
+        nargs="+",
+        metavar="KEY",
+        help="Sort order, comma separated keys: popularity, score, title, start, end, id, mal_id. Add :asc or :desc to a key, e.g. score,title:desc. popularity and id are always added as tie-breakers. Decides rank numbers and what --limit keeps (default: popularity)"
+    )
+    filter_group.add_argument(
         "-l",
         "--limit",
         type=positive_int,
-        help="Only keep the top N titles per season, or in total with --merge (applied after format and genre filters and --sort)"
+        metavar="N",
+        help="Only keep top N titles per season, or in total with --merge (applied after format and genre filters and --sort)"
     )
-    parser.add_argument(
-        "-t",
-        "--title-language",
-        nargs="+",
-        metavar="LANG",
-        default=["romaji"],
-        help="Title language for file names: romaji, english, native. Comma separated in priority order; romaji is always the final fallback"
+
+    out_group = parser.add_argument_group("Output & File Management")
+    out_group.add_argument(
+        "-o",
+        "--out",
+        type=str,
+        default=DEFAULT_OUT_DIR,
+        metavar="DIR",
+        help="Base output directory for downloaded covers"
     )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Re-download images even if they already exist"
-    )
-    parser.add_argument(
-        "--no-prune",
-        action="store_true",
-        help="Keep images from earlier runs. By default each folder is kept in sync with the latest run, and images this tool downloaded earlier that are no longer part of it are removed"
-    )
-    parser.add_argument(
-        "-Y",
-        "--yes",
-        action="store_true",
-        help=f"Skip confirmation prompts for large runs (more than {CONFIRM_ABOVE} seasons' worth, a whole year counts as {YEAR_WEIGHT}) and fuzzy-matched typos"
-    )
-    parser.add_argument(
+    out_group.add_argument(
         "-m",
         "--merge",
         nargs="?",
@@ -391,20 +415,52 @@ def main():
         metavar="NAME",
         help=f"Put everything into one folder (default name: {DEFAULT_MERGE_NAME}) instead of one per season. Duplicates are merged"
     )
-    parser.add_argument(
-        "-S",
-        "--sort",
+    out_group.add_argument(
+        "-t",
+        "--title-language",
         nargs="+",
-        metavar="KEY",
-        help="Sort order, comma separated keys: popularity, score, title, start, end, id, mal_id. Add :asc or :desc to a key, e.g. score,title:desc. popularity and id are always added as tie-breakers. Decides rank numbers and what --limit keeps (default: popularity)"
+        metavar="LANG",
+        default=list(DEFAULT_TITLE_LANGUAGES),
+        help="Title language for file names: romaji, english, native. Comma separated in priority order; romaji is always the final fallback"
+    )
+    out_group.add_argument(
+        "--no-json",
+        action="store_true",
+        help="Do not output metadata JSON"
+    )
+    out_group.add_argument(
+        "--no-prune",
+        action="store_true",
+        help="Keep images from earlier runs instead of removing ones no longer part of current run"
+    )
+    out_group.add_argument(
+        "-Y",
+        "--yes",
+        action="store_true",
+        help=f"Skip confirmation prompts for large runs (more than {CONFIRM_ABOVE} seasons' worth, a whole year counts as {YEAR_WEIGHT}) and fuzzy-matched typos"
     )
 
-    parser.add_argument(
-        "-g",
-        "--grace-days",
+    dl_group = parser.add_argument_group("Download & Network")
+    dl_group.add_argument(
+        "-w",
+        "--workers",
         type=int,
-        default=21,
-        help="Days into a season a previous-season show must still air to count as continuing"
+        default=DEFAULT_WORKERS,
+        metavar="N",
+        help="Number of parallel download workers"
+    )
+    dl_group.add_argument(
+        "-d",
+        "--delay",
+        type=int,
+        default=DEFAULT_DELAY,
+        metavar="MS",
+        help="Minimum delay between image requests, shared by all workers (milliseconds)"
+    )
+    dl_group.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-download images even if they already exist"
     )
 
     args = parser.parse_args()
